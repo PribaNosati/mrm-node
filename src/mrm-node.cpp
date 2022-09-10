@@ -73,8 +73,9 @@ void Mrm_node::add(char * deviceName)
 
 /** Read CAN Bus message into local variables
 @param data - 8 bytes from CAN Bus message.
+@param length - number of data bytes
 */
-bool Mrm_node::messageDecode(uint32_t canId, uint8_t data[8]) {
+bool Mrm_node::messageDecode(uint32_t canId, uint8_t data[8], uint8_t length) {
 
 	for (uint8_t deviceNumber = 0; deviceNumber < nextFree; deviceNumber++)
 		if (isForMe(canId, deviceNumber)) {
@@ -107,7 +108,7 @@ bool Mrm_node::messageDecode(uint32_t canId, uint8_t data[8]) {
 										   break;
 				default:
 					robotContainer->print("Unknown command. ");
-					messagePrint(canId, 8, data, false);
+					messagePrint(canId, length, data, false);
 					errorCode = 204;
 					errorInDeviceNumber = deviceNumber;
 				}
