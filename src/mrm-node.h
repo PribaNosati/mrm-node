@@ -73,7 +73,7 @@ public:
 	@param data - 8 bytes from CAN Bus message.
 	@param length - number of data bytes
 	*/
-	bool messageDecode(uint32_t canId, uint8_t data[8], uint8_t length);
+	bool messageDecode(uint32_t canId, uint8_t data[8], uint8_t dlc = 8);
 
 	/** Analog readings
 	@param receiverNumberInSensor - single IR transistor in mrm-ref-can
