@@ -1,8 +1,7 @@
 #include "mrm-node.h"
 #include <mrm-robot.h>
 
-std::vector<uint8_t>* commandIndexes_mrm_node =  new std::vector<uint8_t>(); // C++ 17 enables static variables without global initialization, but no C++ 17 here
-std::vector<String>* commandNames_mrm_node =  new std::vector<String>();
+std::map<int, std::string>* Mrm_node::commandNamesSpecific = NULL;
 
 /** Constructor
 @param robot - robot containing this board
@@ -10,23 +9,19 @@ std::vector<String>* commandNames_mrm_node =  new std::vector<String>();
 @param hardwareSerial - Serial, Serial1, Serial2,... - an optional serial port, for example for Bluetooth communication
 @param maxNumberOfBoards - maximum number of boards
 */
-Mrm_node::Mrm_node(Robot* robot, uint8_t maxNumberOfBoards) : 
-	SensorBoard(robot, 1, "Node", maxNumberOfBoards, ID_MRM_NODE, 1) {
+Mrm_node::Mrm_node(uint8_t maxNumberOfBoards) : 
+	SensorBoard(1, "Node", maxNumberOfBoards, ID_MRM_NODE, 1) {
 	readings = new std::vector<uint16_t[MRM_NODE_ANALOG_COUNT]>(maxNumberOfBoards);
 	switches = new std::vector<bool[MRM_NODE_SWITCHES_COUNT]>(maxNumberOfBoards);
 	servoDegrees = new std::vector<uint16_t[MRM_NODE_SERVO_COUNT]>(maxNumberOfBoards);
 	
-	if (commandIndexes_mrm_node->empty()){
-		commandIndexes_mrm_node->push_back(COMMAND_NODE_SENDING_SENSORS_1_TO_3);
-		commandNames_mrm_node->push_back("Send 1-3");
-		commandIndexes_mrm_node->push_back(COMMAND_NODE_SENDING_SENSORS_4_TO_6);
-		commandNames_mrm_node->push_back("Send 4-6");
-		commandIndexes_mrm_node->push_back(COMMAND_NODE_SENDING_SENSORS_7_TO_9);
-		commandNames_mrm_node->push_back("Send 7-9");
-		commandIndexes_mrm_node->push_back(COMMAND_NODE_SWITCH_ON);
-		commandNames_mrm_node->push_back("Switch on");
-		commandIndexes_mrm_node->push_back(COMMAND_NODE_SERVO_SET);
-		commandNames_mrm_node->push_back("Servo set");
+	if (commandNamesSpecific == NULL){
+		commandNamesSpecific = new std::map<int, std::string>();
+		commandNamesSpecific->insert({COMMAND_NODE_SENDING_SENSORS_1_TO_3, 	"Send 1-3"});
+		commandNamesSpecific->insert({COMMAND_NODE_SENDING_SENSORS_4_TO_6, 	"Send 4-6"});
+		commandNamesSpecific->insert({COMMAND_NODE_SENDING_SENSORS_7_TO_9, 	"Send 7-9"});
+		commandNamesSpecific->insert({COMMAND_NODE_SWITCH_ON,				"Switch on"});
+		commandNamesSpecific->insert({COMMAND_NODE_SERVO_SET,				"Servo set"});
 	}
 }
 
@@ -74,7 +69,7 @@ void Mrm_node::add(char * deviceName)
 		canOut = CAN_ID_NODE7_OUT;
 		break;
 	default:
-		sprintf(errorMessage, "Too many %s: %i.", _boardsName, nextFree);
+		sprintf(errorMessage, "Too many %s: %i.", _boardsName.c_str(), nextFree);
 		return;
 	}
 
@@ -87,18 +82,25 @@ void Mrm_node::add(char * deviceName)
 	SensorBoard::add(deviceName, canIn, canOut);
 }
 
+std::string Mrm_node::commandName(uint8_t byte){
+	auto it = commandNamesSpecific->find(byte);
+	if (it == commandNamesSpecific->end())
+		return "Warning: no command found for key " + (int)byte;
+	else
+		return it->second;//commandNamesSpecific->at(byte);
+}
+
 /** Read CAN Bus message into local variables
 @param data - 8 bytes from CAN Bus message.
 @param length - number of data bytes
 */
-bool Mrm_node::messageDecode(uint32_t canId, uint8_t data[8], uint8_t dlc) {
-
-	for (uint8_t deviceNumber = 0; deviceNumber < nextFree; deviceNumber++)
-		if (isForMe(canId, deviceNumber)) {
-			if (!messageDecodeCommon(canId, data, deviceNumber)) {
+bool Mrm_node::messageDecode(CANMessage& message) {
+	for (Device& device : devices)
+		if (isForMe(message.id, device)) {
+			if (!messageDecodeCommon(message, device)) {
 				bool any = false;
 				uint8_t startIndex = 0;
-				switch (data[0]) {
+				switch (message.data[0]) {
 				case COMMAND_NODE_SENDING_SENSORS_1_TO_3:
 					startIndex = 0;
 					any = true;
@@ -110,28 +112,25 @@ bool Mrm_node::messageDecode(uint32_t canId, uint8_t data[8], uint8_t dlc) {
 				case COMMAND_NODE_SENDING_SENSORS_7_TO_9:
 					startIndex = 6;
 					any = true;
-					(*_lastReadingMs)[deviceNumber] = millis();
+					device.lastReadingsMs = millis();
 					break;
 				case COMMAND_NODE_SWITCH_ON: {
-					uint8_t switchNumber = data[1] >> 1;
+					uint8_t switchNumber = message.data[1] >> 1;
 					if (switchNumber > 4) {
-						strcpy(errorMessage, "No mrm-switch");
+						strcpy(errorMessage, "No switch");
 						return false;
 					}
-					(*switches)[deviceNumber][switchNumber] = data[1] & 1;
-					(*_lastReadingMs)[deviceNumber] = millis();
+					(*switches)[device.number][switchNumber] = message.data[1] & 1;
+					device.lastReadingsMs = millis();
 				}
-				break;
+										   break;
 				default:
-					print("Unknown command. ");
-					messagePrint(canId, dlc, data, false);
-					errorCode = 204;
-					errorInDeviceNumber = deviceNumber;
+					errorAdd(message, ERROR_COMMAND_UNKNOWN, false, true);
 				}
 
 				if (any)
 					for (uint8_t i = 0; i <= 2; i++)
-						(*readings)[deviceNumber][startIndex + i] = (data[2 * i + 1] << 8) | data[2 * i + 2];
+						(*readings)[device.number][startIndex + i] = (message.data[2 * i + 1] << 8) | message.data[2 * i + 2];
 			}
 			return true;
 		}
@@ -145,7 +144,7 @@ bool Mrm_node::messageDecode(uint32_t canId, uint8_t data[8], uint8_t dlc) {
 */
 uint16_t Mrm_node::reading(uint8_t receiverNumberInSensor, uint8_t deviceNumber) {
 	if (deviceNumber >= nextFree || receiverNumberInSensor > MRM_NODE_ANALOG_COUNT) {
-		sprintf(errorMessage, "%s %i doesn't exist.", _boardsName, deviceNumber);
+		sprintf(errorMessage, "%s %i doesn't exist.", _boardsName.c_str(), deviceNumber);
 		return 0;
 	}
 	if (started(deviceNumber))
@@ -159,27 +158,27 @@ uint16_t Mrm_node::reading(uint8_t receiverNumberInSensor, uint8_t deviceNumber)
 */
 void Mrm_node::readingsPrint() {
 	print("Ref. array:");
-	for (uint8_t deviceNumber = 0; deviceNumber < nextFree; deviceNumber++) {
+	for (Device& device: devices){
 		for (uint8_t irNo = 0; irNo < MRM_NODE_ANALOG_COUNT; irNo++)
-			print(" %3i", (*readings)[deviceNumber][irNo]);
+			print(" %3i", (*readings)[device.number][irNo]);
 	}
 }
 
 /** Test servos
 */
 void Mrm_node::servoTest() {
-	static uint32_t lastMs = 0;
+	static uint64_t lastMs = 0;
 
 	if (millis() - lastMs > 100) {
 		for (uint8_t deg = 0; deg <= 180; deg += 5) {
-			for (uint8_t deviceNumber = 0; deviceNumber < nextFree; deviceNumber++) {
-				if (alive(deviceNumber)) {
+			for (Device& device: devices) {
+				if (device.alive) {
 					for (uint8_t servoNumber = 0; servoNumber < MRM_NODE_SERVO_COUNT; servoNumber++)
-						servoWrite(servoNumber, deg, deviceNumber);
+						servoWrite(servoNumber, deg, device.number);
 				}
 			}
 			print("%i deg.\n\r", deg);
-			robotContainer->delayMs(100);
+			delay(100);
 		}
 		lastMs = millis();
 	}
@@ -202,7 +201,7 @@ void Mrm_node::servoWrite(uint8_t servoNumber, uint16_t degrees, uint8_t deviceN
 		canData[3] = degrees & 0xFF;
 		(*servoDegrees)[deviceNumber][servoNumber] = degrees;
 
-		robotContainer->mrm_can_bus->messageSend((*idIn)[deviceNumber], 4, canData);
+		messageSend(canData, 4, deviceNumber);
 	}
 }
 
@@ -211,21 +210,21 @@ void Mrm_node::servoWrite(uint8_t servoNumber, uint16_t degrees, uint8_t deviceN
 @return - started or not
 */
 bool Mrm_node::started(uint8_t deviceNumber) {
-	if (millis() - (*_lastReadingMs)[deviceNumber] > MRM_NODE_INACTIVITY_ALLOWED_MS || (*_lastReadingMs)[deviceNumber] == 0) {
+	if (millis() - devices[deviceNumber].lastReadingsMs > MRM_NODE_INACTIVITY_ALLOWED_MS || devices[deviceNumber].lastReadingsMs == 0) {
 		//print("Start mrm-node%i \n\r", deviceNumber);
 		for (uint8_t i = 0; i < 8; i++) { // 8 tries
-			start(deviceNumber, 0);
+			start(&devices[deviceNumber], 0);
 			// Wait for 1. message.
 			uint32_t startMs = millis();
 			while (millis() - startMs < 50) {
-				if (millis() - (*_lastReadingMs)[deviceNumber] < 100) {
+				if (millis() - devices[deviceNumber].lastReadingsMs < 100) {
 					//print("Lidar confirmed\n\r"); 
 					return true;
 				}
-				robotContainer->delayMs(1);
+				delayMs(1);
 			}
 		}
-		sprintf(errorMessage, "%s %i dead.", _boardsName, deviceNumber);
+		sprintf(errorMessage, "%s %i dead.", _boardsName.c_str(), deviceNumber);
 		return false;
 	}
 	else
@@ -239,7 +238,7 @@ bool Mrm_node::started(uint8_t deviceNumber) {
 */
 bool Mrm_node::switchRead(uint8_t switchNumber, uint8_t deviceNumber) {
 	if (deviceNumber >= nextFree || switchNumber >= MRM_NODE_SWITCHES_COUNT) {
-		sprintf(errorMessage, "%s %i doesn't exist.", _boardsName, deviceNumber);
+		sprintf(errorMessage, "%s %i doesn't exist.", _boardsName.c_str(), deviceNumber);
 		return false;
 	}
 	return (*switches)[deviceNumber][switchNumber];
@@ -250,20 +249,20 @@ bool Mrm_node::switchRead(uint8_t switchNumber, uint8_t deviceNumber) {
 */
 void Mrm_node::test()
 {
-	static uint32_t lastMs = 0;
+	static uint64_t lastMs = 0;
 
 	if (millis() - lastMs > 300) {
 		uint8_t pass = 0;
-		for (uint8_t deviceNumber = 0; deviceNumber < nextFree; deviceNumber++) {
-			if (alive(deviceNumber)) {
+		for (Device& device: devices) {
+			if (device.alive) {
 				if (pass++)
 					print("| ");
 				print("An:");
 				for (uint8_t i = 0; i < MRM_NODE_ANALOG_COUNT; i++)
-					print("%i ", (*readings)[deviceNumber][i]);
+					print("%i ", (*readings)[device.number][i]);
 				print("Di:");
 				for (uint8_t i = 0; i < MRM_NODE_SWITCHES_COUNT; i++)
-					print("%i ", (*switches)[deviceNumber][i]);
+					print("%i ", (*switches)[device.number][i]);
 			}
 		}
 		lastMs = millis();

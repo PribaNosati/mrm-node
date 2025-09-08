@@ -1,6 +1,7 @@
 #pragma once
 #include "Arduino.h"
 #include <mrm-board.h>
+#include <map>
 
 /**
 Purpose: mrm-node interface to CANBus.
@@ -52,6 +53,7 @@ class Mrm_node : public SensorBoard
 	bool started(uint8_t deviceNumber);
 
 public:
+	static std::map<int, std::string>* commandNamesSpecific;
 
 	/** Constructor
 	@param robot - robot containing this board
@@ -59,7 +61,7 @@ public:
 	@param hardwareSerial - Serial, Serial1, Serial2,... - an optional serial port, for example for Bluetooth communication
 	@param maxNumberOfBoards - maximum number of boards
 	*/
-	Mrm_node(Robot* robot = NULL, uint8_t maxNumberOfBoards = 2);
+	Mrm_node(uint8_t maxNumberOfBoards = 2);
 
 	~Mrm_node();
 
@@ -68,12 +70,14 @@ public:
 	*/
 	void add(char * deviceName = (char*)"");
 
+	std::string commandName(uint8_t byte);
+	
 	/** Read CAN Bus message into local variables
 	@param canId - CAN Bus id
 	@param data - 8 bytes from CAN Bus message.
 	@param length - number of data bytes
 	*/
-	bool messageDecode(uint32_t canId, uint8_t data[8], uint8_t dlc = 8);
+	bool messageDecode(CANMessage& message);
 
 	/** Analog readings
 	@param receiverNumberInSensor - single IR transistor in mrm-ref-can
